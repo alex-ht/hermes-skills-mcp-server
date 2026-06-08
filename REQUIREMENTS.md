@@ -11,6 +11,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - **Standalone & Zero-Dependency on Hermes**: Must work in an environment that only has OpenClaw (or any other MCP client). No `~/.hermes` paths as hard defaults.
 - **OpenClaw-First Experience**: Automatic detection of OpenClaw workspace skills (`~/.openclaw/workspace/skills`, `~/.openclaw/workspace/.agents/skills`, etc.).
 - **Explicit Context Control**: Tools must accept an optional `cwd` parameter so the calling agent can specify the intended workspace/project root on a per-call basis (instead of relying only on process cwd or global defaults).
+- **Support for Dynamic / Temporary Workspaces**: Must correctly handle environments where new workspaces are auto-generated on every run (e.g. pinchbench, benchmark runners, isolated test harnesses, CI). Per-call `cwd` is the primary mechanism for switching context in these cases.
 - **Progressive Disclosure**: `skills_list` returns only metadata. Full content is loaded on demand via `skill_view`.
 - **Portable Skill Format**: Uses the widely understood `SKILL.md` format so skills can be shared between different agents.
 - **Security**: Strict containment to the chosen skills root. No path traversal.
@@ -21,6 +22,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - OpenClaw users who want their agent to have first-class, on-demand access to skills (beyond CLI `openclaw skills` commands).
 - Anyone who wants a neutral, MCP-based skill system that is not tied to a specific agent framework.
 - People maintaining shared skill libraries across Hermes + OpenClaw setups.
+- Teams using automated testing / benchmarking frameworks that spawn fresh workspaces (pinchbench etc.).
 
 ## Functional Requirements
 
@@ -36,6 +38,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - Neutral fallback: `~/.agent-skills`
 - **The `cwd` parameter on tools must override only the "local project" layer** while still allowing OpenClaw workspace detection to function.
 - The resolved root must be returned in tool responses (e.g. `"skills_root"` field) for transparency.
+- Must support completely new, temporary workspaces created at runtime (pinchbench-style) when the correct `cwd` is supplied on the call.
 
 **FR-2: skills_list tool**
 
@@ -79,6 +82,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - Documentation must lead with `openclaw mcp set ...` (not Hermes commands).
 - Clear examples for both auto-detection (`SKILLS_ROOT` env) and per-call `cwd` usage.
 - Explain that the workspace is dynamically detected rather than a single hardcoded default.
+- Explicitly document support for dynamically generated workspaces (pinchbench etc.) via the `cwd` parameter.
 
 ## Non-Functional Requirements
 
@@ -87,6 +91,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - Fast startup and tool responses.
 - Works when run via `uv run` or after packaging.
 - The `cwd` parameter must be optional (default `None` → full auto-detection) for convenience while still enabling explicit control.
+- Tool calls must be stateless so that rapidly changing workspaces (new temp dir per test) can be handled without server restart.
 
 ## Out of Scope (Initial Version)
 
@@ -101,6 +106,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - In a pure OpenClaw installation (no Hermes), registering the server via `openclaw mcp set` allows the agent to successfully call `skills_list` and `skill_view` on skills located in `~/.openclaw/workspace/skills`.
 - Auto-detection correctly picks up the user's OpenClaw workspace without any manual `SKILLS_ROOT`.
 - The agent can pass `cwd="/some/workspace"` (or a project dir) on individual tool calls and get skills resolved relative to that context.
+- When a completely new temporary workspace is created (e.g. by pinchbench), passing the new path as `cwd` causes the tools to immediately see only the skills in that new workspace (verified by simulation).
 - The server can be used to create new skills that the agent can immediately view.
 - Responses always report the actual `skills_root` used.
 

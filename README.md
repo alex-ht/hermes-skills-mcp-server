@@ -98,6 +98,31 @@ skill_manage(action="create", name="my-new-skill", frontmatter={...}, body="..."
 
 This design is ideal for agents: the LLM can decide "for this task I want skills from this workspace" and pass the `cwd` explicitly on the tool call.
 
+## Handling Dynamically Generated / Temporary Workspaces (pinchbench, benchmark runners, isolated tests, CI)
+
+Frameworks like **pinchbench** (and similar test harnesses) often **automatically create brand new, isolated workspace directories** for every test or benchmark run (e.g. `/tmp/pinchbench_run_42/workspace`, `/tmp/test-xyz/workspace`).
+
+In these situations:
+
+- Global auto-detection or a fixed `SKILLS_ROOT` env var will **not** be sufficient — they are too static.
+- You **must** pass the freshly created workspace path using the `cwd` parameter on **every** tool call.
+
+Because the server is completely stateless (resolution happens fresh on each tool invocation), it will correctly and instantly switch to the skills living inside that temporary workspace.
+
+**Verified behavior** (live simulation test with real temporary directory):
+- Calling `skills_list()` / `skill_view()` **without** `cwd` → stays on the real persistent OpenClaw workspace (e.g. `~/.openclaw/workspace/skills`), count = 5 real skills, the temporary test skill is invisible.
+- Calling with `cwd="/tmp/.../pinchbench_run_XX/workspace"` → immediately resolves to `<new_workspace>/skills`, lists only the skills that exist in that run (including a dynamically created "Test Skill for Pinchbench"), and `skill_view(name="test-skill", cwd=...)` successfully returns the frontmatter + body.
+
+Recommended practice for such environments:
+- Instruct your agent (in system prompt or via the test harness) to **always include the current test workspace** when calling skills tools:
+  ```json
+  skills_list(cwd="<current_pinchbench_or_test_workspace>")
+  skill_view(name="xxx", cwd="<current_pinchbench_or_test_workspace>")
+  ```
+- The harness should expose the active workspace path to the agent for each isolated run.
+
+This makes the MCP server fully compatible with isolated, auto-generated workspace workflows such as pinchbench.
+
 ## Running & Testing
 
 ```bash
