@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """
-Hermes Skills MCP Server
+Agent Skills MCP Server (SKILL.md format)
 
-Exposes Hermes-compatible skill tools (skills_list, skill_view, skill_manage)
-over the Model Context Protocol (MCP) using FastMCP.
+A standalone MCP server that exposes skills_list, skill_view, and skill_manage
+tools using the standard SKILL.md + YAML frontmatter format.
 
-This server allows other agent environments (OpenClaw, Hermes, Claude Desktop,
-Cursor, etc.) to discover, inspect, and manage skills that follow the standard
-SKILL.md + frontmatter format.
+This is designed to work in **pure OpenClaw environments** (no Hermes Agent
+required at all), as well as mixed environments.
 
-Designed for interoperability with the agentskills.io / Hermes skill ecosystem.
+The server lets the agent programmatically:
+- List available skills (lightweight metadata)
+- View full skill content (equivalent to "skills info")
+- Manage (create/update) skills
+
+Skills can live in OpenClaw workspace locations, a dedicated directory,
+or anywhere you point via SKILLS_ROOT.
 """
 
 import json
@@ -21,24 +26,86 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 # =============================================================================
-# Configuration
+# Configuration - OpenClaw friendly by default
 # =============================================================================
 
-DEFAULT_SKILLS_ROOT = Path.home() / ".hermes" / "skills"
+def _get_openclaw_workspace() -> Optional[Path]:
+    """Try to discover OpenClaw's active workspace from its config."""
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    if not config_path.exists():
+        return None
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        ws = cfg.get("agents", {}).get("defaults", {}).get("workspace")
+        if ws:
+            p = Path(ws).expanduser().resolve()
+            if p.is_dir():
+                return p
+    except Exception:
+        pass
+    # Common default
+    default = Path.home() / ".openclaw" / "workspace"
+    if default.is_dir():
+        return default.resolve()
+    return None
 
 def get_skills_root() -> Path:
-    """Resolve the configured skills root directory."""
-    env_root = os.environ.get("SKILLS_ROOT")
-    if env_root:
-        return Path(env_root).expanduser().resolve()
-    return DEFAULT_SKILLS_ROOT.resolve()
+    """
+    Resolve the skills directory with strong support for pure OpenClaw usage.
+
+    Priority (highest first):
+    1. SKILLS_ROOT environment variable (recommended for explicit control)
+    2. Current working directory's local skills folders (project-specific)
+    3. OpenClaw workspace skills: <workspace>/skills or <workspace>/.agents/skills
+    4. Global OpenClaw-friendly locations (~/.openclaw/skills)
+    5. Fallback: ~/.agent-skills (neutral, no Hermes required)
+    """
+    # 1. Explicit override
+    if env_root := os.environ.get("SKILLS_ROOT"):
+        root = Path(env_root).expanduser().resolve()
+        ensure_root_exists(root)
+        return root
+
+    cwd = Path.cwd().resolve()
+
+    # 2. Local skills next to current project (very useful in OpenClaw)
+    for local in [
+        cwd / "skills",
+        cwd / ".skills",
+        cwd / ".agents/skills",
+        cwd / "agent-skills",
+    ]:
+        if local.is_dir():
+            return local.resolve()
+
+    # 3. OpenClaw workspace skills (primary for pure OpenClaw users)
+    oc_ws = _get_openclaw_workspace()
+    if oc_ws:
+        for candidate in [
+            oc_ws / "skills",
+            oc_ws / ".agents/skills",
+            oc_ws / "agent-skills",
+        ]:
+            if candidate.is_dir():
+                return candidate.resolve()
+
+    # 4. Dedicated global OpenClaw skills location (recommended convention)
+    openclaw_global = Path.home() / ".openclaw" / "skills"
+    if openclaw_global.is_dir():
+        return openclaw_global.resolve()
+
+    # 5. Neutral fallback (no Hermes dependency)
+    neutral = Path.home() / ".agent-skills"
+    ensure_root_exists(neutral)
+    return neutral.resolve()
 
 def ensure_root_exists(root: Path) -> None:
     """Create the skills root if it does not exist."""
     root.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
-# Core Skill Utilities (safe, minimal reimplementation of Hermes semantics)
+# Core Skill Utilities (format-compatible with Hermes / agentskills.io)
 # =============================================================================
 
 def _is_safe_relative_path(candidate: str) -> bool:
@@ -59,9 +126,8 @@ def _find_all_skills(root: Path) -> List[Dict[str, Any]]:
     for skill_md in root.rglob("SKILL.md"):
         try:
             rel_dir = skill_md.parent.relative_to(root)
-            skill_name = str(rel_dir) if str(rel_dir) != "." else skill_md.parent.name
+            dir_name = str(rel_dir) if str(rel_dir) != "." else skill_md.parent.name
 
-            # Quick metadata extraction (do not load full body here)
             content = skill_md.read_text(encoding="utf-8", errors="ignore")
             frontmatter: Dict[str, Any] = {}
             if content.startswith("---"):
@@ -72,31 +138,31 @@ def _find_all_skills(root: Path) -> List[Dict[str, Any]]:
                     pass
 
             skills.append({
-                "name": frontmatter.get("name", skill_name),
+                "name": frontmatter.get("name", dir_name),
+                "directory": dir_name,   # reliable lookup key
                 "description": frontmatter.get("description", ""),
-                "relative_path": str(rel_dir),
+                "relative_path": dir_name,
                 "version": frontmatter.get("version"),
                 "platforms": frontmatter.get("platforms"),
                 "category": str(rel_dir.parent) if len(rel_dir.parts) > 1 else None,
             })
         except Exception:
-            # Skip malformed skills gracefully
             continue
 
-    # Sort for deterministic output
     skills.sort(key=lambda s: s["name"].lower())
     return skills
 
 def _load_skill_document(root: Path, name: str, file_path: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Load a skill's main SKILL.md or a supporting file.
-    Returns structured data suitable for agent consumption.
+    """Load a skill's main SKILL.md or a supporting file.
+    
+    'name' can be either the frontmatter name or (preferably) the directory name.
     """
     if not _is_safe_relative_path(name):
         return {"success": False, "error": "Invalid skill name (path traversal or absolute path detected)"}
 
     skill_dir = (root / name).resolve()
-    if not skill_dir.is_relative_to(root.resolve()):
+    root_resolved = root.resolve()
+    if not skill_dir.is_relative_to(root_resolved):
         return {"success": False, "error": "Skill path escapes the configured skills root"}
 
     if not skill_dir.exists():
@@ -125,7 +191,6 @@ def _load_skill_document(root: Path, name: str, file_path: Optional[str] = None)
         "raw_content": raw_content,
     }
 
-    # If this is the main SKILL.md, also provide parsed frontmatter + body
     if target_file.name == "SKILL.md":
         frontmatter: Dict[str, Any] = {}
         body = raw_content
@@ -172,16 +237,17 @@ def _create_skill(root: Path, name: str, frontmatter: Dict[str, Any], body: str)
 # MCP Server Definition
 # =============================================================================
 
-mcp = FastMCP("Hermes Skills")
+mcp = FastMCP("Agent Skills")
 
 @mcp.tool()
 def skills_list(category: Optional[str] = None) -> str:
     """
     List all available skills with lightweight metadata (progressive disclosure).
 
-    Use this first to discover skills. Then call skill_view for full content.
+    This is the equivalent of "skills list". Use this first, then call skill_view
+    to get full content.
 
-    Returns a JSON string with the list of skills.
+    Returns JSON with the list of skills.
     """
     root = get_skills_root()
     ensure_root_exists(root)
@@ -189,7 +255,7 @@ def skills_list(category: Optional[str] = None) -> str:
     skills = _find_all_skills(root)
 
     if category:
-        skills = [s for s in skills if s.get("category") == category or category in (s.get("name", "") + s.get("description", ""))]
+        skills = [s for s in skills if category.lower() in (s.get("name", "") + " " + s.get("description", "")).lower()]
 
     return json.dumps({
         "success": True,
@@ -201,15 +267,15 @@ def skills_list(category: Optional[str] = None) -> str:
 @mcp.tool()
 def skill_view(name: str, file_path: Optional[str] = None) -> str:
     """
-    View the full content of a skill (or a supporting file inside it).
+    View the full content of a skill or a supporting file inside it.
 
-    This is the primary "skill-info" tool.
+    This is the primary "skill-info" tool (equivalent to skills info / reading SKILL.md).
+
+    'name' can be the directory name (recommended) or the name declared in frontmatter.
 
     Args:
-        name: Skill identifier (directory name, e.g. "hermes-agent" or "mlops/axolotl")
-        file_path: Optional sub-path inside the skill (e.g. "references/api.md")
-
-    Returns the parsed frontmatter + body (for SKILL.md) or raw content for other files.
+        name: Skill directory name (e.g. "skill-creator" or "self-improving")
+        file_path: Optional sub-file, e.g. "references/example.md"
     """
     root = get_skills_root()
     ensure_root_exists(root)
@@ -225,13 +291,12 @@ def skill_manage(
     body: Optional[str] = None,
 ) -> str:
     """
-    Create, update or manage skills.
+    Create or manage skills.
 
-    Supported actions (initial implementation):
-      - "create": Create a new skill (requires frontmatter and body)
-      - "patch": Placeholder for future updates (currently returns not implemented)
+    Currently supported:
+    - "create": Create a new skill (provide frontmatter dict and body string)
 
-    This is the "skill management" tool for authoring and maintenance.
+    This gives the agent the ability to author new skills directly.
     """
     root = get_skills_root()
     ensure_root_exists(root)
@@ -247,28 +312,20 @@ def skill_manage(
         result = _create_skill(root, name, frontmatter, body)
         return json.dumps(result, indent=2, ensure_ascii=False)
 
-    elif action in ("patch", "update", "delete", "archive"):
-        return json.dumps({
-            "success": False,
-            "error": f"Action '{action}' is not yet implemented in this version. "
-                     f"Only 'create' is supported in the initial release. "
-                     f"See REQUIREMENTS.md for planned functionality."
-        })
-
-    else:
-        return json.dumps({
-            "success": False,
-            "error": f"Unknown action: {action}. Supported: create"
-        })
+    return json.dumps({
+        "success": False,
+        "error": f"Action '{action}' not implemented yet. Only 'create' is supported in current version."
+    })
 
 # =============================================================================
 # Entry Point
 # =============================================================================
 
 def main():
-    """Run the MCP server (stdio transport by default)."""
-    print("Starting Hermes Skills MCP Server...", flush=True)
-    print(f"Skills root: {get_skills_root()}", flush=True)
+    """Run the MCP server."""
+    root = get_skills_root()
+    print(f"Agent Skills MCP Server starting...", flush=True)
+    print(f"Using skills root: {root}", flush=True)
     mcp.run()
 
 if __name__ == "__main__":

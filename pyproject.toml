@@ -1,7 +1,7 @@
 [project]
-name = "hermes-skills-mcp-server"
+name = "agent-skills-mcp-server"
 version = "0.1.0"
-description = "MCP server exposing Hermes-style skills_list, skill_view, and skill_manage tools. Compatible with OpenClaw, Hermes, Claude Desktop, Cursor and other MCP clients. Uses the standard SKILL.md (agentskills.io) format."
+description = "Standalone MCP server exposing skills_list, skill_view, and skill_manage using the SKILL.md format. Works in pure OpenClaw (no Hermes required). Auto-detects OpenClaw workspace/skills locations."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,10 +10,11 @@ dependencies = [
 ]
 
 [project.scripts]
-hermes-skills-mcp = "hermes_skills_mcp_server.server:main"
+agent-skills-mcp = "hermes_skills_mcp_server.server:main"
 
 [tool.uv]
 dev-dependencies = []
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -1,132 +1,136 @@
-# Hermes Skills MCP Server
+# Agent Skills MCP Server
 
-A standalone Python MCP server that exposes the core Hermes skill tools (`skills_list`, `skill_view`, `skill_manage`) over the Model Context Protocol.
+A **standalone** MCP server that gives agents the ability to list, inspect, and manage skills using the standard `SKILL.md` format (with YAML frontmatter).
 
-This allows **any MCP-compatible agent** (OpenClaw, Hermes, Claude Desktop, Cursor, LM Studio, etc.) to discover, read, and manage skills that follow the standard `SKILL.md` format used by Hermes.
+**Key feature**: Works perfectly in **pure OpenClaw environments** with **zero Hermes Agent dependency**.
 
 ## Why This Exists
 
-- Hermes has a powerful self-improving "skills" system (reusable procedures stored as `SKILL.md` files).
-- Other agents (especially OpenClaw) benefit from accessing the same skill library.
-- This server provides a clean, secure, MCP-native interface to that system without requiring a full Hermes installation.
+OpenClaw (and similar agents) have powerful built-in skills management via CLI (`openclaw skills list`, `skills info`, etc.). However, for the *agent itself* to programmatically discover and read skills during reasoning (progressive disclosure, on-demand loading of full `SKILL.md`), you need MCP tools.
 
-## Features
+This server exposes exactly three tools that agents love to use:
+- `skills_list` — lightweight discovery
+- `skill_view` — the main "skill-info" tool (read full `SKILL.md` or supporting files)
+- `skill_manage` — create new skills (more actions planned)
 
-- `skills_list` — Lightweight discovery (progressive disclosure)
-- `skill_view(name, file_path?)` — Read full `SKILL.md` or any supporting file (`references/`, `templates/`, etc.)
-- `skill_manage` — Create new skills (more actions planned)
-- Strict path safety (no traversal outside the skills root)
-- YAML frontmatter parsing
-- Compatible with the official agentskills.io / Hermes skill format
-- Easy to register in OpenClaw and Hermes
+The format is compatible with the agentskills.io / Hermes SKILL.md convention, so skills are portable.
 
-## Installation & Running
+## Pure OpenClaw Setup (No Hermes Needed)
 
-```bash
-# Clone and enter the project
-cd hermes-skills-mcp-server
+This is the primary intended use case.
 
-# Install with uv (recommended)
-uv sync
+### Recommended Skill Locations for OpenClaw Users
 
-# Run directly
-uv run python -m hermes_skills_mcp_server.server
+1. **Workspace skills** (best for most people):
+   - `~/.openclaw/workspace/skills/`
 
-# Or after installing the package
-uv pip install -e .
-hermes-skills-mcp
-```
+2. **Global / shared skills**:
+   - `~/.openclaw/skills/`
 
-The server uses **stdio** transport by default (ideal for local agent integration).
+3. **Project-specific** (inside your current workspace):
+   - `./skills/`
+   - `./.agents/skills/`
 
-### Configure Skills Location
+The server will **automatically detect** these locations.
+
+### Registration (OpenClaw)
 
 ```bash
-export SKILLS_ROOT=/path/to/your/skills
-# or pass via command line when supported by your MCP client
-```
-
-Default: `~/.hermes/skills`
-
-## Registering with OpenClaw (Recommended for OpenClaw Users)
-
-```bash
-# Persistent registration (preferred)
-openclaw mcp set hermes-skills '{
+# Simplest - let it auto-detect your OpenClaw workspace/skills
+openclaw mcp set agent-skills '{
   "command": "uv",
   "args": [
-    "--directory", "/absolute/path/to/hermes-skills-mcp-server",
+    "--directory", "/absolute/path/to/this-repo",
     "run", "python", "-m", "hermes_skills_mcp_server.server"
   ]
 }'
 
 # Verify
 openclaw mcp list
-openclaw mcp show hermes-skills
+openclaw mcp show agent-skills
 ```
 
-For quick testing inside a chat you can also use the slash command, but `openclaw mcp set` is more reliable across sessions.
-
-## Registering with Hermes
+**Explicit control** (recommended if you have a preferred location):
 
 ```bash
-hermes mcp add hermes-skills --command 'uv --directory /path/to/hermes-skills-mcp-server run python -m hermes_skills_mcp_server.server'
+openclaw mcp set agent-skills '{
+  "command": "uv",
+  "args": ["--directory", "/path/to/repo", "run", "python", "-m", "hermes_skills_mcp_server.server"],
+  "env": {
+    "SKILLS_ROOT": "/home/alex/.openclaw/workspace/skills"
+  }
+}'
 ```
 
-## Tool Reference (What Agents See)
+## How Auto-Detection Works (OpenClaw)
 
-### skills_list
-List available skills with metadata only.
+The server uses this priority (no Hermes paths involved):
 
-### skill_view
-The main "skill-info" tool. Load complete content:
+1. `SKILLS_ROOT` environment variable (highest priority)
+2. Local folders next to your current working directory (`skills/`, `.skills/`, `.agents/skills/`)
+3. OpenClaw workspace skills (`<workspace>/skills`, `<workspace>/.agents/skills`)
+4. `~/.openclaw/skills/`
+5. Fallback: `~/.agent-skills/` (neutral directory)
 
-```json
-{
-  "name": "hermes-agent",
-  "file_path": "references/some-doc.md"   // optional
-}
+This means in a typical pure OpenClaw session, it will usually just find `~/.openclaw/workspace/skills/` automatically.
+
+## Running & Testing
+
+```bash
+cd hermes-skills-mcp-server
+uv sync
+
+# Run it
+uv run python -m hermes_skills_mcp_server.server
 ```
 
-### skill_manage
-Currently supports `create`. More management actions will be added.
+Once connected in OpenClaw, the agent can call:
+- `skills_list`
+- `skill_view(name="skill-creator")`
+- `skill_view(name="self-improving", file_path="...")` (if you have sub-files)
+- `skill_manage(action="create", ...)`
 
-## Example Skill Structure
+## Creating New Skills
 
+Skills are just directories containing a `SKILL.md` file.
+
+Example structure:
 ```
-~/.hermes/skills/
-├── hermes-agent/
+~/.openclaw/workspace/skills/
+├── my-custom-skill/
 │   ├── SKILL.md
 │   └── references/
-│       └── prompt-builder-environment-hints.md
-├── mlops/
-│   └── axolotl/
-│       ├── SKILL.md
-│       └── templates/
-│           └── training-script.py
+│       └── usage-notes.md
 ```
 
-## Development & Testing
+The `SKILL.md` starts with YAML frontmatter:
 
-```bash
-# Run the server
-uv run python -m hermes_skills_mcp_server.server
+```markdown
+---
+name: my-custom-skill
+description: Does something useful for my workflow.
+version: 1.0.0
+---
 
-# In another terminal, you can test with the official MCP tools or by connecting from an agent.
+# My Custom Skill
+
+Detailed instructions here...
 ```
 
-A sample skill is included under `examples/sample-skill/` for quick testing.
+## Project Status
 
-## Requirements & Handoff
+This is a working, minimal but functional implementation.
 
-See `REQUIREMENTS.md` for the full software development requirements document. This document is written in a style optimized for handoff to autonomous coding agents (Grok Build, Claude, etc.).
+See `REQUIREMENTS.md` for the full specification (written for handoff to coding agents like Grok).
+
+## Future Improvements
+
+- Full CRUD in `skill_manage` (patch, delete, archive)
+- Better integration with OpenClaw's native `skills install` flow
+- Optional global vs workspace skill separation
 
 ## License
 
-MIT (aligned with Hermes Agent)
+MIT
 
-## Related Projects
-
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-- OpenClaw / ClawHub ecosystem
-- agentskills.io format
+Repo: https://github.com/alex-ht/hermes-skills-mcp-server
