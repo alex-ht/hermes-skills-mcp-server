@@ -4,6 +4,8 @@ A **standalone** MCP server that gives agents the ability to list, inspect, and 
 
 **Key feature**: Works perfectly in **pure OpenClaw environments** with **zero Hermes Agent dependency**.
 
+All tools (`skills_list`, `skill_view`, `skill_manage`) now accept an optional `cwd` parameter so the calling agent can explicitly specify the workspace context on every call.
+
 ## Why This Exists
 
 OpenClaw (and similar agents) have powerful built-in skills management via CLI (`openclaw skills list`, `skills info`, etc.). However, for the *agent itself* to programmatically discover and read skills during reasoning (progressive disclosure, on-demand loading of full `SKILL.md`), you need MCP tools.
@@ -31,7 +33,7 @@ This is the primary intended use case.
    - `./skills/`
    - `./.agents/skills/`
 
-The server will **automatically detect** these locations.
+The server will **automatically detect** these locations (see below).
 
 ### Registration (OpenClaw)
 
@@ -64,15 +66,37 @@ openclaw mcp set agent-skills '{
 
 ## How Auto-Detection Works (OpenClaw)
 
-The server uses this priority (no Hermes paths involved):
+**Important**: The workspace directory is **not** a single fixed default value. It is dynamically resolved with the following priority (no Hermes paths involved):
 
 1. `SKILLS_ROOT` environment variable (highest priority)
-2. Local folders next to your current working directory (`skills/`, `.skills/`, `.agents/skills/`)
-3. OpenClaw workspace skills (`<workspace>/skills`, `<workspace>/.agents/skills`)
+2. Local folders next to the **provided `cwd`** (or real process cwd if `cwd` omitted): `skills/`, `.skills/`, `.agents/skills/`, `agent-skills/`
+3. OpenClaw workspace skills (`<workspace>/skills`, `<workspace>/.agents/skills`) — read from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`) or the common default `~/.openclaw/workspace`
 4. `~/.openclaw/skills/`
 5. Fallback: `~/.agent-skills/` (neutral directory)
 
 This means in a typical pure OpenClaw session, it will usually just find `~/.openclaw/workspace/skills/` automatically.
+
+## Explicit Workspace Context via the `cwd` Parameter (Recommended for Agents)
+
+To give the calling agent precise control (independent of the MCP server's process working directory), all three tools accept an optional `cwd` parameter:
+
+```json
+// List skills in a specific workspace
+skills_list(cwd="/home/alex/.openclaw/workspace")
+
+// View a skill using explicit context
+skill_view(name="proactivity", cwd="/home/alex/.openclaw/workspace")
+
+// Create a skill in a project-specific location
+skill_manage(action="create", name="my-new-skill", frontmatter={...}, body="...", cwd="/path/to/current/project")
+```
+
+- If `cwd` is provided, it becomes the base for the "local project skills" detection layer (#2 above).
+- Passing the workspace root (e.g. `~/.openclaw/workspace`) will reliably pick up `<workspace>/skills`.
+- If omitted, the server falls back to full auto-detection (including the real process `cwd` and OpenClaw config).
+- The tool response always includes the final resolved `"skills_root"` so you can see what was used.
+
+This design is ideal for agents: the LLM can decide "for this task I want skills from this workspace" and pass the `cwd` explicitly on the tool call.
 
 ## Running & Testing
 
@@ -85,9 +109,10 @@ uv run python -m hermes_skills_mcp_server.server
 ```
 
 Once connected in OpenClaw, the agent can call:
-- `skills_list`
+- `skills_list()`
+- `skills_list(cwd="/home/alex/.openclaw/workspace")`
 - `skill_view(name="skill-creator")`
-- `skill_view(name="self-improving", file_path="...")` (if you have sub-files)
+- `skill_view(name="self-improving", cwd="/home/alex/.openclaw/workspace", file_path="...")`
 - `skill_manage(action="create", ...)`
 
 ## Creating New Skills
@@ -128,6 +153,7 @@ See `REQUIREMENTS.md` for the full specification (written for handoff to coding 
 - Full CRUD in `skill_manage` (patch, delete, archive)
 - Better integration with OpenClaw's native `skills install` flow
 - Optional global vs workspace skill separation
+- More sophisticated workspace inference from cwd (e.g. walking up to find .openclaw markers)
 
 ## License
 

@@ -10,8 +10,14 @@ required at all), as well as mixed environments.
 
 The server lets the agent programmatically:
 - List available skills (lightweight metadata)
-- View full skill content (equivalent to "skills info")
+- View full skill content (equivalent to "skills info" / skill-info)
 - Manage (create/update) skills
+
+**Key feature for context control**: All tools accept an optional `cwd` parameter.
+When provided, it is used as the base directory for discovering project-local
+skills (e.g. <cwd>/skills or <cwd>/.agents/skills). This allows the calling
+agent to explicitly specify the intended workspace on every tool call,
+independent of the MCP server's process working directory.
 
 Skills can live in OpenClaw workspace locations, a dedicated directory,
 or anywhere you point via SKILLS_ROOT.
@@ -50,31 +56,41 @@ def _get_openclaw_workspace() -> Optional[Path]:
         return default.resolve()
     return None
 
-def get_skills_root() -> Path:
+def get_skills_root(cwd: Optional[str] = None) -> Path:
     """
     Resolve the skills directory with strong support for pure OpenClaw usage.
 
     Priority (highest first):
     1. SKILLS_ROOT environment variable (recommended for explicit control)
-    2. Current working directory's local skills folders (project-specific)
+    2. Local skills folders relative to the provided (or real) `cwd` (project-specific)
     3. OpenClaw workspace skills: <workspace>/skills or <workspace>/.agents/skills
     4. Global OpenClaw-friendly locations (~/.openclaw/skills)
     5. Fallback: ~/.agent-skills (neutral, no Hermes required)
+
+    Args:
+        cwd: Optional base directory to use for layer #2 (local project skills).
+             If omitted, falls back to the server's real process cwd.
+             This parameter is exposed on every tool so the calling agent
+             can explicitly control context per call.
     """
-    # 1. Explicit override
+    # 1. Explicit override (always wins)
     if env_root := os.environ.get("SKILLS_ROOT"):
         root = Path(env_root).expanduser().resolve()
         ensure_root_exists(root)
         return root
 
-    cwd = Path.cwd().resolve()
+    # Determine base for local project skills detection
+    if cwd:
+        base_cwd = Path(cwd).expanduser().resolve()
+    else:
+        base_cwd = Path.cwd().resolve()
 
-    # 2. Local skills next to current project (very useful in OpenClaw)
+    # 2. Local skills next to the (provided or real) base cwd (very useful in OpenClaw)
     for local in [
-        cwd / "skills",
-        cwd / ".skills",
-        cwd / ".agents/skills",
-        cwd / "agent-skills",
+        base_cwd / "skills",
+        base_cwd / ".skills",
+        base_cwd / ".agents/skills",
+        base_cwd / "agent-skills",
     ]:
         if local.is_dir():
             return local.resolve()
@@ -240,16 +256,22 @@ def _create_skill(root: Path, name: str, frontmatter: Dict[str, Any], body: str)
 mcp = FastMCP("Agent Skills")
 
 @mcp.tool()
-def skills_list(category: Optional[str] = None) -> str:
+def skills_list(category: Optional[str] = None, cwd: Optional[str] = None) -> str:
     """
     List all available skills with lightweight metadata (progressive disclosure).
 
     This is the equivalent of "skills list". Use this first, then call skill_view
     to get full content.
 
-    Returns JSON with the list of skills.
+    Returns JSON with the list of skills + the resolved skills_root.
+
+    Args:
+        category: Optional filter (matches name or description).
+        cwd: Optional base directory for resolving project-local skills
+             (e.g. pass your workspace or project root). If omitted, the server
+             performs full auto-detection (OpenClaw config + real cwd).
     """
-    root = get_skills_root()
+    root = get_skills_root(cwd)
     ensure_root_exists(root)
 
     skills = _find_all_skills(root)
@@ -265,7 +287,7 @@ def skills_list(category: Optional[str] = None) -> str:
     }, indent=2, ensure_ascii=False)
 
 @mcp.tool()
-def skill_view(name: str, file_path: Optional[str] = None) -> str:
+def skill_view(name: str, file_path: Optional[str] = None, cwd: Optional[str] = None) -> str:
     """
     View the full content of a skill or a supporting file inside it.
 
@@ -276,8 +298,10 @@ def skill_view(name: str, file_path: Optional[str] = None) -> str:
     Args:
         name: Skill directory name (e.g. "skill-creator" or "self-improving")
         file_path: Optional sub-file, e.g. "references/example.md"
+        cwd: Optional base directory for resolving project-local skills.
+             Pass this to force a specific workspace context for this call.
     """
-    root = get_skills_root()
+    root = get_skills_root(cwd)
     ensure_root_exists(root)
 
     result = _load_skill_document(root, name, file_path)
@@ -289,6 +313,7 @@ def skill_manage(
     name: str,
     frontmatter: Optional[Dict[str, Any]] = None,
     body: Optional[str] = None,
+    cwd: Optional[str] = None,
 ) -> str:
     """
     Create or manage skills.
@@ -297,8 +322,16 @@ def skill_manage(
     - "create": Create a new skill (provide frontmatter dict and body string)
 
     This gives the agent the ability to author new skills directly.
+
+    Args:
+        action: "create" (more actions coming)
+        name: Skill directory name
+        frontmatter: dict for the YAML frontmatter section
+        body: Markdown body content
+        cwd: Optional base directory for resolving project-local skills.
+             Pass this to force a specific workspace context for this call.
     """
-    root = get_skills_root()
+    root = get_skills_root(cwd)
     ensure_root_exists(root)
 
     action = action.lower().strip()
