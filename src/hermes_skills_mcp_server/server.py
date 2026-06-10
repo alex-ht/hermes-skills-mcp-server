@@ -25,6 +25,7 @@ or anywhere you point via SKILLS_ROOT.
 
 import json
 import os
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -168,6 +169,53 @@ def _find_all_skills(root: Path) -> List[Dict[str, Any]]:
     skills.sort(key=lambda s: s["name"].lower())
     return skills
 
+
+def _score_match(query: str, text: str) -> float:
+    """Return similarity ratio [0.0-1.0] between query and text."""
+    if not query or not text:
+        return 0.0
+    return SequenceMatcher(None, query.lower(), text.lower()).ratio()
+
+
+def _find_fuzzy_matches(
+    skills: List[Dict[str, Any]],
+    query: str,
+    limit: int = 5,
+    threshold: float = 0.48,
+) -> List[Dict[str, Any]]:
+    """
+    Fuzzy match query against skill name, directory and description.
+    Returns skills (with added 'score') that meet the threshold, sorted best first.
+    """
+    scored: List[Dict[str, Any]] = []
+    q = query.strip()
+    if not q:
+        return []
+
+    for s in skills:
+        name = s.get("name", "")
+        directory = s.get("directory", "")
+        desc = s.get("description", "")
+
+        name_score = _score_match(q, name)
+        dir_score = _score_match(q, directory)
+        desc_score = _score_match(q, desc)
+
+        # Description gets slightly lower weight (it's usually longer)
+        overall = max(name_score, dir_score, desc_score * 0.75)
+
+        # Strong boost for substring containment (handles typos + partial names well)
+        haystack = f"{name} {directory} {desc}".lower()
+        if q.lower() in haystack:
+            overall = max(overall, 0.88)
+
+        if overall >= threshold:
+            scored.append({**s, "score": round(overall, 3)})
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:limit]
+
+
 def _load_skill_document(root: Path, name: str, file_path: Optional[str] = None) -> Dict[str, Any]:
     """Load a skill's main SKILL.md or a supporting file.
     
@@ -305,6 +353,29 @@ def skill_view(name: str, file_path: Optional[str] = None, cwd: Optional[str] = 
     ensure_root_exists(root)
 
     result = _load_skill_document(root, name, file_path)
+
+    if not result.get("success"):
+        err = result.get("error", "")
+        if "Skill not found" in err:
+            all_skills = _find_all_skills(root)
+            matches = _find_fuzzy_matches(all_skills, name)
+
+            if matches:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Skill not found: {name}. Found similar skills by name or description:",
+                    "suggestions": matches
+                }, indent=2, ensure_ascii=False)
+            else:
+                # Completely unable to match → return full skills list + short problem description
+                return json.dumps({
+                    "success": False,
+                    "error": f"Skill not found: {name}. No similar skill found (checked name and description).",
+                    "skills_root": str(root),
+                    "count": len(all_skills),
+                    "skills": all_skills
+                }, indent=2, ensure_ascii=False)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 @mcp.tool()
