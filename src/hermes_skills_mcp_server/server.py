@@ -57,6 +57,10 @@ def _get_openclaw_workspace() -> Optional[Path]:
         return default.resolve()
     return None
 
+def _has_any_skill(path: Path) -> bool:
+    """True if `path` is a directory containing at least one SKILL.md (recursively)."""
+    return path.is_dir() and next(path.rglob("SKILL.md"), None) is not None
+
 def get_skills_root(cwd: Optional[str] = None) -> Path:
     """
     Resolve the skills directory with strong support for pure OpenClaw usage.
@@ -68,6 +72,11 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
     3. OpenClaw workspace skills: <workspace>/skills or <workspace>/.agents/skills
     4. Global OpenClaw-friendly locations (~/.openclaw/skills, ~/.agents/skills)
     5. Fallback: ~/.agent-skills (neutral, no Hermes required)
+
+    Layers #2-4b are skipped when the candidate directory exists but contains
+    no SKILL.md (e.g. a freshly created, still-empty workspace/skills folder),
+    so an empty higher-priority directory doesn't shadow real skills living in
+    a lower-priority one.
 
     Args:
         cwd: Optional base directory to use for layer #2 (local project skills).
@@ -96,7 +105,7 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
         base_cwd / ".agents/skills",
         base_cwd / "agent-skills",
     ]:
-        if local.is_dir():
+        if _has_any_skill(local):
             return local.resolve()
 
     # 3. OpenClaw workspace skills (primary for pure OpenClaw users)
@@ -107,17 +116,17 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
             oc_ws / ".agents/skills",
             oc_ws / "agent-skills",
         ]:
-            if candidate.is_dir():
+            if _has_any_skill(candidate):
                 return candidate.resolve()
 
     # 4. Dedicated global OpenClaw skills location (recommended convention)
     openclaw_global = Path.home() / ".openclaw" / "skills"
-    if openclaw_global.is_dir():
+    if _has_any_skill(openclaw_global):
         return openclaw_global.resolve()
 
     # 4b. Global agent-skills convention (~/.agents/skills)
     agents_global = Path.home() / ".agents" / "skills"
-    if agents_global.is_dir():
+    if _has_any_skill(agents_global):
         return agents_global.resolve()
 
     # 5. Neutral fallback (no Hermes dependency)
