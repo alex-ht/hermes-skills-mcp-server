@@ -28,6 +28,7 @@ This is the primary intended use case.
 
 2. **Global / shared skills**:
    - `~/.openclaw/skills/`
+   - `~/.agents/skills/`
 
 3. **Project-specific** (inside your current workspace):
    - `./skills/`
@@ -71,7 +72,7 @@ openclaw mcp set agent-skills '{
 1. `SKILLS_ROOT` environment variable (highest priority)
 2. Local folders next to the **provided `cwd`** (or the `WORKDIR` environment variable, or real process cwd if both are omitted): `skills/`, `.skills/`, `.agents/skills/`, `agent-skills/`
 3. OpenClaw workspace skills (`<workspace>/skills`, `<workspace>/.agents/skills`) — read from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`) or the common default `~/.openclaw/workspace`
-4. `~/.openclaw/skills/`
+4. `~/.openclaw/skills/`, then `~/.agents/skills/`
 5. Fallback: `~/.agent-skills/` (neutral directory)
 
 This means in a typical pure OpenClaw session, it will usually just find `~/.openclaw/workspace/skills/` automatically.

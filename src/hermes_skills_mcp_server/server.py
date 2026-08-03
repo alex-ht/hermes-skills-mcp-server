@@ -66,7 +66,7 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
     2. Local skills folders relative to the provided `cwd`, or the `WORKDIR`
        environment variable, or the real process cwd (project-specific)
     3. OpenClaw workspace skills: <workspace>/skills or <workspace>/.agents/skills
-    4. Global OpenClaw-friendly locations (~/.openclaw/skills)
+    4. Global OpenClaw-friendly locations (~/.openclaw/skills, ~/.agents/skills)
     5. Fallback: ~/.agent-skills (neutral, no Hermes required)
 
     Args:
@@ -114,6 +114,11 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
     openclaw_global = Path.home() / ".openclaw" / "skills"
     if openclaw_global.is_dir():
         return openclaw_global.resolve()
+
+    # 4b. Global agent-skills convention (~/.agents/skills)
+    agents_global = Path.home() / ".agents" / "skills"
+    if agents_global.is_dir():
+        return agents_global.resolve()
 
     # 5. Neutral fallback (no Hermes dependency)
     neutral = Path.home() / ".agent-skills"
