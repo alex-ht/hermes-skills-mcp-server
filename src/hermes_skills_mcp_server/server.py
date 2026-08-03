@@ -63,16 +63,17 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
 
     Priority (highest first):
     1. SKILLS_ROOT environment variable (recommended for explicit control)
-    2. Local skills folders relative to the provided (or real) `cwd` (project-specific)
+    2. Local skills folders relative to the provided `cwd`, or the `WORKDIR`
+       environment variable, or the real process cwd (project-specific)
     3. OpenClaw workspace skills: <workspace>/skills or <workspace>/.agents/skills
     4. Global OpenClaw-friendly locations (~/.openclaw/skills)
     5. Fallback: ~/.agent-skills (neutral, no Hermes required)
 
     Args:
         cwd: Optional base directory to use for layer #2 (local project skills).
-             If omitted, falls back to the server's real process cwd.
-             This parameter is exposed on every tool so the calling agent
-             can explicitly control context per call.
+             If omitted, falls back to the `WORKDIR` environment variable, then
+             the server's real process cwd. This parameter is exposed on every
+             tool so the calling agent can explicitly control context per call.
     """
     # 1. Explicit override (always wins)
     if env_root := os.environ.get("SKILLS_ROOT"):
@@ -83,6 +84,8 @@ def get_skills_root(cwd: Optional[str] = None) -> Path:
     # Determine base for local project skills detection
     if cwd:
         base_cwd = Path(cwd).expanduser().resolve()
+    elif workdir := os.environ.get("WORKDIR"):
+        base_cwd = Path(workdir).expanduser().resolve()
     else:
         base_cwd = Path.cwd().resolve()
 
@@ -317,7 +320,8 @@ def skills_list(category: Optional[str] = None, cwd: Optional[str] = None) -> st
         category: Optional filter (matches name or description).
         cwd: Optional base directory for resolving project-local skills
              (e.g. pass your workspace or project root). If omitted, the server
-             performs full auto-detection (OpenClaw config + real cwd).
+             falls back to the WORKDIR environment variable, then full
+             auto-detection (OpenClaw config + real cwd).
     """
     root = get_skills_root(cwd)
     ensure_root_exists(root)
@@ -348,6 +352,7 @@ def skill_view(name: str, file_path: Optional[str] = None, cwd: Optional[str] = 
         file_path: Optional sub-file, e.g. "references/example.md"
         cwd: Optional base directory for resolving project-local skills.
              Pass this to force a specific workspace context for this call.
+             If omitted, falls back to the WORKDIR environment variable.
     """
     root = get_skills_root(cwd)
     ensure_root_exists(root)
@@ -401,6 +406,7 @@ def skill_manage(
         body: Markdown body content
         cwd: Optional base directory for resolving project-local skills.
              Pass this to force a specific workspace context for this call.
+             If omitted, falls back to the WORKDIR environment variable.
     """
     root = get_skills_root(cwd)
     ensure_root_exists(root)

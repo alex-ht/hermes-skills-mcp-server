@@ -69,7 +69,7 @@ openclaw mcp set agent-skills '{
 **Important**: The workspace directory is **not** a single fixed default value. It is dynamically resolved with the following priority (no Hermes paths involved):
 
 1. `SKILLS_ROOT` environment variable (highest priority)
-2. Local folders next to the **provided `cwd`** (or real process cwd if `cwd` omitted): `skills/`, `.skills/`, `.agents/skills/`, `agent-skills/`
+2. Local folders next to the **provided `cwd`** (or the `WORKDIR` environment variable, or real process cwd if both are omitted): `skills/`, `.skills/`, `.agents/skills/`, `agent-skills/`
 3. OpenClaw workspace skills (`<workspace>/skills`, `<workspace>/.agents/skills`) — read from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`) or the common default `~/.openclaw/workspace`
 4. `~/.openclaw/skills/`
 5. Fallback: `~/.agent-skills/` (neutral directory)
@@ -93,7 +93,7 @@ skill_manage(action="create", name="my-new-skill", frontmatter={...}, body="..."
 
 - If `cwd` is provided, it becomes the base for the "local project skills" detection layer (#2 above).
 - Passing the workspace root (e.g. `~/.openclaw/workspace`) will reliably pick up `<workspace>/skills`.
-- If omitted, the server falls back to full auto-detection (including the real process `cwd` and OpenClaw config).
+- If omitted, the server falls back to the `WORKDIR` environment variable, then full auto-detection (including the real process `cwd` and OpenClaw config).
 - The tool response always includes the final resolved `"skills_root"` so you can see what was used.
 
 This design is ideal for agents: the LLM can decide "for this task I want skills from this workspace" and pass the `cwd` explicitly on the tool call.
