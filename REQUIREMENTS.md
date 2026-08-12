@@ -2,7 +2,7 @@
 
 ## Project Goals
 
-Provide a **completely standalone** MCP server (no Hermes Agent required) that implements the core skill management tools (`skills_list`, `skill_view`, `skill_manage`) using the standard `SKILL.md` + YAML frontmatter format.
+Provide a **completely standalone** MCP server (no Hermes Agent required) that implements the core skill management tools (`skills_list`, `skill_view`, `skill_manage`) plus a general-purpose `read_text` tool, using the standard `SKILL.md` + YAML frontmatter format.
 
 The primary target is **pure OpenClaw environments**. OpenClaw users should be able to give their agent the ability to discover, read, and author skills programmatically via MCP, just like Hermes agents can.
 
@@ -83,6 +83,19 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - Clear examples for both auto-detection (`SKILLS_ROOT` env) and per-call `cwd` usage.
 - Explain that the workspace is dynamically detected rather than a single hardcoded default.
 - Explicitly document support for dynamically generated workspaces (pinchbench etc.) via the `cwd` parameter.
+
+**FR-8: read_text tool**
+
+- `read_text(path, offset?, lines?, cwd?, encoding?)` — general-purpose text file reader (not bound to the skills root).
+- `path` may be absolute or relative; relative paths resolve against `cwd` when provided, else the process cwd.
+- **Hard limit of 50K bytes (51200) per call**: never return more than this much file data in one response. This is a critical agent-facing rule and must be documented in the tool description.
+- `offset` is a non-negative **byte** offset (default `0`). When content is truncated, the response MUST include `truncated: true` and `next_offset` so the agent can continue with `offset=next_offset`. When the end of the file is reached, `truncated` is `false` and `next_offset` is `null`.
+- **`lines` (optional)**: when omitted/`null`, read the entire file (within the 50K byte cap). When set to a positive integer N, return at most N lines (still subject to the 50K cap). Invalid values (non-positive, non-integer) must return a clear error.
+- On success returns JSON with `success`, `path` (resolved absolute), `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, `content`, and a `message` when truncated explaining how to continue (byte cap vs line limit).
+- Chunk boundaries must not split multi-byte characters for the chosen encoding (trim incomplete trailing sequences; for UTF-8, skip incomplete lead bytes when `offset > 0`).
+- **Text only**: if the target is not a text file (e.g. contains NUL bytes, or cannot be decoded with the given encoding), return `success: false` with a clear error such as `"Cannot read file: not a text file"` and **must not include any file content**.
+- Clear errors for missing paths, directories, empty `path`, invalid/past-end `offset`, invalid `lines`, unknown encoding, and I/O failures.
+- Optional `encoding` (default `utf-8`).
 
 ## Non-Functional Requirements
 

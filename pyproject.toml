@@ -1,7 +1,7 @@
 [project]
 name = "agent-skills-mcp-server"
 version = "0.1.0"
-description = "Standalone MCP server exposing skills_list, skill_view, and skill_manage using the SKILL.md format. Works in pure OpenClaw (no Hermes required). Auto-detects OpenClaw workspace/skills locations."
+description = "Standalone MCP server exposing skills_list, skill_view, skill_manage, and read_text using the SKILL.md format. Works in pure OpenClaw (no Hermes required). Auto-detects OpenClaw workspace/skills locations."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

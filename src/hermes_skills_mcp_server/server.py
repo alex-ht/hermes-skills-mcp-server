@@ -2,8 +2,8 @@
 """
 Agent Skills MCP Server (SKILL.md format)
 
-A standalone MCP server that exposes skills_list, skill_view, and skill_manage
-tools using the standard SKILL.md + YAML frontmatter format.
+A standalone MCP server that exposes skills_list, skill_view, skill_manage,
+and read_text tools using the standard SKILL.md + YAML frontmatter format.
 
 This is designed to work in **pure OpenClaw environments** (no Hermes Agent
 required at all), as well as mixed environments.
@@ -13,11 +13,12 @@ The server lets the agent programmatically:
 - View full skill content (equivalent to "skills info" / skill-info)
 - Manage (create/update) skills
 
-**Key feature for context control**: All tools accept an optional `cwd` parameter.
+**Key feature for context control**: Skill tools accept an optional `cwd` parameter.
 When provided, it is used as the base directory for discovering project-local
 skills (e.g. <cwd>/skills or <cwd>/.agents/skills). This allows the calling
 agent to explicitly specify the intended workspace on every tool call,
-independent of the MCP server's process working directory.
+independent of the MCP server's process working directory. The `read_text` tool
+uses `cwd` to resolve relative file paths.
 
 Skills can live in OpenClaw workspace locations, a dedicated directory,
 or anywhere you point via SKILLS_ROOT.
@@ -314,6 +315,216 @@ def _create_skill(root: Path, name: str, frontmatter: Dict[str, Any], body: str)
         "message": "Skill created successfully",
     }
 
+
+_TEXT_PROBE_BYTES = 8192
+# Hard cap per call: agents must use `offset` to continue past this size.
+MAX_READ_BYTES = 50 * 1024  # 50K bytes (51200)
+
+
+def _is_text_bytes(sample: bytes) -> bool:
+    """Heuristic: treat files with NUL bytes in the sample as non-text/binary."""
+    return b"\x00" not in sample
+
+
+def _normalize_encoding_name(encoding: str) -> str:
+    return encoding.lower().replace("-", "").replace("_", "")
+
+
+def _skip_incomplete_utf8_lead(raw: bytes) -> int:
+    """If `raw` starts mid UTF-8 sequence, return how many lead bytes to skip."""
+    skip = 0
+    while skip < min(3, len(raw)) and (raw[skip] & 0xC0) == 0x80:
+        skip += 1
+    return skip
+
+
+def _decode_chunk(raw: bytes, encoding: str) -> tuple[str, int]:
+    """
+    Decode as many leading bytes of `raw` as possible under `encoding`.
+
+    Returns (text, bytes_consumed). Trailing incomplete multi-byte sequences are
+    trimmed so we never cut mid-character; the next call can resume at offset+bytes_consumed.
+    """
+    if not raw:
+        return "", 0
+
+    last_error: Optional[UnicodeDecodeError] = None
+    for end in range(len(raw), 0, -1):
+        try:
+            return raw[:end].decode(encoding), end
+        except UnicodeDecodeError as e:
+            last_error = e
+            # Incomplete sequence at the end → trim and retry.
+            # Error well before the end → not valid text for this encoding.
+            if e.start < max(0, end - 8):
+                raise
+            continue
+
+    if last_error is not None:
+        raise last_error
+    raise UnicodeDecodeError(encoding, raw, 0, 1, "failed to decode chunk")
+
+
+def _count_lines(text: str) -> int:
+    """Count lines in text (empty string → 0)."""
+    if not text:
+        return 0
+    return len(text.splitlines())
+
+
+def _apply_line_limit(content: str, lines: int, encoding: str) -> tuple[str, int, bool]:
+    """
+    Keep at most `lines` lines from `content`.
+
+    Returns (possibly_truncated_content, bytes_consumed, hit_line_limit).
+    `bytes_consumed` is the encoded byte length of the returned content.
+    """
+    parts = content.splitlines(keepends=True)
+    if len(parts) <= lines:
+        encoded = content.encode(encoding)
+        return content, len(encoded), False
+
+    taken = "".join(parts[:lines])
+    encoded = taken.encode(encoding)
+    return taken, len(encoded), True
+
+
+def _read_text_file(
+    path: str,
+    cwd: Optional[str] = None,
+    encoding: str = "utf-8",
+    offset: int = 0,
+    lines: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Resolve and read a text file chunk.
+
+    At most MAX_READ_BYTES (50K) of file data are returned per call. Optional
+    `lines` caps how many lines are returned (default: no line cap / entire file
+    within the byte limit). Use `offset` (byte position) to continue.
+    Non-text files fail without returning content.
+    """
+    if not path or not str(path).strip():
+        return {"success": False, "error": "path must be a non-empty string"}
+
+    if offset is None:
+        offset = 0
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        return {"success": False, "error": "offset must be a non-negative integer"}
+    if offset < 0:
+        return {"success": False, "error": "offset must be a non-negative integer"}
+
+    if lines is not None:
+        if not isinstance(lines, int) or isinstance(lines, bool) or lines < 1:
+            return {
+                "success": False,
+                "error": "lines must be a positive integer, or omit/null to read the entire file",
+            }
+
+    raw_path = Path(path).expanduser()
+    if raw_path.is_absolute():
+        target = raw_path.resolve()
+    else:
+        if cwd:
+            base = Path(cwd).expanduser().resolve()
+        else:
+            base = Path.cwd().resolve()
+        target = (base / raw_path).resolve()
+
+    if not target.exists():
+        return {"success": False, "error": f"File not found: {target}"}
+
+    if not target.is_file():
+        return {"success": False, "error": f"Not a file: {target}"}
+
+    try:
+        size_bytes = target.stat().st_size
+
+        with target.open("rb") as f:
+            sample = f.read(_TEXT_PROBE_BYTES)
+            if not _is_text_bytes(sample):
+                return {
+                    "success": False,
+                    "error": "Cannot read file: not a text file",
+                    "path": str(target),
+                }
+
+            if offset > size_bytes:
+                return {
+                    "success": False,
+                    "error": f"offset {offset} is past end of file (size_bytes={size_bytes})",
+                    "path": str(target),
+                    "size_bytes": size_bytes,
+                    "offset": offset,
+                }
+
+            f.seek(offset)
+            raw = f.read(MAX_READ_BYTES)
+
+        lead_skip = 0
+        if offset > 0 and _normalize_encoding_name(encoding) == "utf8":
+            lead_skip = _skip_incomplete_utf8_lead(raw)
+            raw = raw[lead_skip:]
+
+        content, bytes_consumed = _decode_chunk(raw, encoding)
+        hit_line_limit = False
+        if lines is not None:
+            content, bytes_consumed, hit_line_limit = _apply_line_limit(
+                content, lines, encoding
+            )
+
+        # Bytes advanced from the requested offset (includes any UTF-8 lead skip).
+        bytes_read = lead_skip + bytes_consumed
+        next_offset = offset + bytes_read
+        truncated = next_offset < size_bytes
+        lines_returned = _count_lines(content)
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "path": str(target),
+            "encoding": encoding,
+            "size_bytes": size_bytes,
+            "offset": offset,
+            "bytes_read": bytes_read,
+            "max_bytes": MAX_READ_BYTES,
+            "lines": lines,
+            "lines_returned": lines_returned,
+            "truncated": truncated,
+            "next_offset": next_offset if truncated else None,
+            "content": content,
+        }
+        if truncated:
+            if hit_line_limit:
+                result["message"] = (
+                    f"Stopped after {lines} line(s) (lines limit). "
+                    f"Call again with offset={next_offset} to continue reading "
+                    f"(pass the same lines value if you want another batch of that size)."
+                )
+            else:
+                result["message"] = (
+                    f"Content truncated at {MAX_READ_BYTES} bytes per call. "
+                    f"Call again with offset={next_offset} to continue reading."
+                )
+        return result
+    except UnicodeDecodeError:
+        return {
+            "success": False,
+            "error": "Cannot read file: not a text file",
+            "path": str(target),
+        }
+    except LookupError:
+        return {
+            "success": False,
+            "error": f"Unknown encoding: {encoding}",
+            "path": str(target),
+        }
+    except OSError as e:
+        return {
+            "success": False,
+            "error": f"Failed to read file: {e}",
+            "path": str(target),
+        }
+
 # =============================================================================
 # MCP Server Definition
 # =============================================================================
@@ -440,6 +651,53 @@ def skill_manage(
         "success": False,
         "error": f"Action '{action}' not implemented yet. Only 'create' is supported in current version."
     })
+
+
+@mcp.tool()
+def read_text(
+    path: str,
+    offset: int = 0,
+    lines: Optional[int] = None,
+    cwd: Optional[str] = None,
+    encoding: str = "utf-8",
+) -> str:
+    """
+    Read a text file and return its contents as JSON.
+
+    IMPORTANT — 50K byte limit (system rule):
+    - Each call returns at most 50K bytes (51200) of file data.
+    - If the file is larger, the response sets truncated=true and provides
+      next_offset. You MUST call read_text again with offset=next_offset to
+      continue; do not assume you have the full file when truncated is true.
+    - Always start with offset=0 (or omit offset). Never guess offsets; use
+      the next_offset from the previous response.
+
+    Line limit (`lines`):
+    - Optional. When omitted (default), read as much of the file as the 50K
+      byte cap allows (entire file if it fits).
+    - When set to a positive integer N, return at most N lines (still subject
+      to the 50K byte cap). If more content remains, truncated=true and
+      next_offset points to the next byte to read.
+
+    Only text files are supported. If the target is binary or otherwise not
+    valid text under the given encoding, the tool returns an error and does
+    not include any file content.
+
+    Args:
+        path: File path. Absolute paths are used as-is; relative paths resolve
+              against `cwd` when provided, otherwise against the process cwd.
+        offset: Byte offset to start reading from (default 0). Use next_offset
+                from a previous truncated response to continue.
+        lines: Optional max number of lines to return. Omit/null to read the
+               entire file (within the 50K byte limit). Must be a positive
+               integer when provided.
+        cwd: Optional base directory for resolving a relative `path`.
+        encoding: Text encoding used to decode the file (default "utf-8").
+    """
+    result = _read_text_file(
+        path, cwd=cwd, encoding=encoding, offset=offset, lines=lines
+    )
+    return json.dumps(result, indent=2, ensure_ascii=False)
 
 # =============================================================================
 # Entry Point

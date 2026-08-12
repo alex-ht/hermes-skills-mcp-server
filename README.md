@@ -4,16 +4,17 @@ A **standalone** MCP server that gives agents the ability to list, inspect, and 
 
 **Key feature**: Works perfectly in **pure OpenClaw environments** with **zero Hermes Agent dependency**.
 
-All tools (`skills_list`, `skill_view`, `skill_manage`) now accept an optional `cwd` parameter so the calling agent can explicitly specify the workspace context on every call.
+Skill tools (`skills_list`, `skill_view`, `skill_manage`) accept an optional `cwd` parameter so the calling agent can explicitly specify the workspace context on every call. The general-purpose `read_text` tool uses `cwd` to resolve relative file paths.
 
 ## Why This Exists
 
 OpenClaw (and similar agents) have powerful built-in skills management via CLI (`openclaw skills list`, `skills info`, etc.). However, for the *agent itself* to programmatically discover and read skills during reasoning (progressive disclosure, on-demand loading of full `SKILL.md`), you need MCP tools.
 
-This server exposes exactly three tools that agents love to use:
+This server exposes these tools that agents love to use:
 - `skills_list` — lightweight discovery
 - `skill_view` — the main "skill-info" tool (read full `SKILL.md` or supporting files)
 - `skill_manage` — create new skills (more actions planned)
+- `read_text` — read an arbitrary text file (absolute or relative path; rejects non-text)
 
 The format is compatible with the agentskills.io / Hermes SKILL.md convention, so skills are portable.
 
@@ -79,7 +80,7 @@ This means in a typical pure OpenClaw session, it will usually just find `~/.ope
 
 ## Explicit Workspace Context via the `cwd` Parameter (Recommended for Agents)
 
-To give the calling agent precise control (independent of the MCP server's process working directory), all three tools accept an optional `cwd` parameter:
+To give the calling agent precise control (independent of the MCP server's process working directory), skill tools accept an optional `cwd` parameter. `read_text` also accepts `cwd` for relative path resolution:
 
 ```json
 // List skills in a specific workspace
@@ -90,6 +91,18 @@ skill_view(name="proactivity", cwd="/home/alex/.openclaw/workspace")
 
 // Create a skill in a project-specific location
 skill_manage(action="create", name="my-new-skill", frontmatter={...}, body="...", cwd="/path/to/current/project")
+
+// Read a text file (absolute path, or relative to cwd)
+read_text(path="notes.md", cwd="/path/to/project")
+read_text(path="/absolute/path/to/file.txt")
+
+// Large files: at most 50K bytes per call — continue with offset
+read_text(path="/absolute/path/to/large.txt")
+read_text(path="/absolute/path/to/large.txt", offset=51200)
+
+// Optional line limit (default: entire file within the 50K cap)
+read_text(path="/absolute/path/to/file.txt", lines=50)
+read_text(path="/absolute/path/to/file.txt", offset=1234, lines=50)
 ```
 
 - If `cwd` is provided, it becomes the base for the "local project skills" detection layer (#2 above).
@@ -140,6 +153,15 @@ Once connected in OpenClaw, the agent can call:
 - `skill_view(name="skill-creator")`
 - `skill_view(name="self-improving", cwd="/home/alex/.openclaw/workspace", file_path="...")`
 - `skill_manage(action="create", ...)`
+- `read_text(path="README.md", cwd="/path/to/project")`
+- `read_text(path="/absolute/path/to/notes.txt")`
+
+### `read_text` notes
+
+- Returns JSON with `success`, `path`, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, and `content` on success.
+- **50K byte limit (important)**: each call returns at most **50K bytes (51200)**. If more data remains, `truncated` is `true` and `next_offset` is set — call again with `offset=next_offset` until `truncated` is `false`. Do not assume a single call returns the whole file.
+- **`lines` (optional)**: max number of lines to return. **Default (omit/`null`) = read the entire file** (still capped by 50K bytes). When set, returns at most that many lines; if more content remains, use `offset=next_offset` to continue.
+- **Text files only**: if the target is binary/non-text (NUL bytes in the probe sample, or cannot decode with the given encoding), the tool returns `success: false` with an error like `"Cannot read file: not a text file"` and **does not include file content**.
 
 ## Creating New Skills
 
