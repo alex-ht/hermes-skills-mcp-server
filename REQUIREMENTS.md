@@ -87,7 +87,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 **FR-8: read_text tool**
 
 - `read_text(path, offset?, lines?, cwd?, encoding?)` — general-purpose text file reader (not bound to the skills root).
-- `path` may be absolute or relative; relative paths resolve against `cwd` when provided, else the process cwd.
+- `path` may be absolute or relative; relative paths resolve against `cwd` when provided, else the `WORKDIR` environment variable, else the process cwd (same base order as skill tools / `get_skills_root` layer #2).
 - **Hard limit of 50K bytes (51200) per call**: never return more than this much file data in one response. This is a critical agent-facing rule and must be documented in the tool description.
 - `offset` is a non-negative **byte** offset (default `0`). When content is truncated, the response MUST include `truncated: true` and `next_offset` so the agent can continue with `offset=next_offset`. When the end of the file is reached, `truncated` is `false` and `next_offset` is `null`.
 - **`lines` (optional)**: when omitted/`null`, read the entire file (within the 50K byte cap). When set to a positive integer N, return at most N lines (still subject to the 50K cap). Invalid values (non-positive, non-integer) must return a clear error.

@@ -161,6 +161,7 @@ Once connected in OpenClaw, the agent can call:
 - Returns JSON with `success`, `path`, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, and `content` on success.
 - **50K byte limit (important)**: each call returns at most **50K bytes (51200)**. If more data remains, `truncated` is `true` and `next_offset` is set — call again with `offset=next_offset` until `truncated` is `false`. Do not assume a single call returns the whole file.
 - **`lines` (optional)**: max number of lines to return. **Default (omit/`null`) = read the entire file** (still capped by 50K bytes). When set, returns at most that many lines; if more content remains, use `offset=next_offset` to continue.
+- **Relative `path` base** (same order as skill tools): explicit `cwd` → `WORKDIR` env → process cwd.
 - **Text files only**: if the target is binary/non-text (NUL bytes in the probe sample, or cannot decode with the given encoding), the tool returns `success: false` with an error like `"Cannot read file: not a text file"` and **does not include file content**.
 
 ## Creating New Skills

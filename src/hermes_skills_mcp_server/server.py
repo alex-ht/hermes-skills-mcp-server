@@ -425,8 +425,12 @@ def _read_text_file(
     if raw_path.is_absolute():
         target = raw_path.resolve()
     else:
+        # Same base resolution as skill tools (get_skills_root layer #2):
+        # explicit cwd → WORKDIR env → process cwd.
         if cwd:
             base = Path(cwd).expanduser().resolve()
+        elif workdir := os.environ.get("WORKDIR"):
+            base = Path(workdir).expanduser().resolve()
         else:
             base = Path.cwd().resolve()
         target = (base / raw_path).resolve()
@@ -685,13 +689,15 @@ def read_text(
 
     Args:
         path: File path. Absolute paths are used as-is; relative paths resolve
-              against `cwd` when provided, otherwise against the process cwd.
+              against `cwd` when provided, else the WORKDIR environment
+              variable, else the process cwd (same order as skill tools).
         offset: Byte offset to start reading from (default 0). Use next_offset
                 from a previous truncated response to continue.
         lines: Optional max number of lines to return. Omit/null to read the
                entire file (within the 50K byte limit). Must be a positive
                integer when provided.
         cwd: Optional base directory for resolving a relative `path`.
+             If omitted, falls back to WORKDIR, then the process cwd.
         encoding: Text encoding used to decode the file (default "utf-8").
     """
     result = _read_text_file(
