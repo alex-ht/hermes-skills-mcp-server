@@ -320,10 +320,45 @@ _TEXT_PROBE_BYTES = 8192
 # Hard cap per call: agents must use `offset` to continue past this size.
 MAX_READ_BYTES = 50 * 1024  # 50K bytes (51200)
 
+# Common non-text extensions rejected early with a clear agent-facing error.
+# Content heuristics (NUL / decode) still apply to extension-less or unknown types.
+_NON_TEXT_EXTENSIONS = frozenset({
+    # Documents / Office (not plain text)
+    ".pdf",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".odt", ".ods", ".odp",
+    # Images
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff",
+    ".heic", ".heif", ".avif",
+    # Archives / packages
+    ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".tar",
+    # Audio / video
+    ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv",
+    # Fonts / binaries / native
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+    ".pyc", ".pyo", ".class", ".o", ".a",
+    ".sqlite", ".db",
+})
+
 
 def _is_text_bytes(sample: bytes) -> bool:
     """Heuristic: treat files with NUL bytes in the sample as non-text/binary."""
     return b"\x00" not in sample
+
+
+def _non_text_extension_error(path: Path) -> Optional[str]:
+    """If path has a known non-text extension, return an error message; else None."""
+    suffix = path.suffix.lower()
+    if suffix not in _NON_TEXT_EXTENSIONS:
+        return None
+    return (
+        f"Cannot read file: not a text file ({suffix}). "
+        "Do not use read_text for PDF, images, Office documents, archives, "
+        "audio/video, or other binary formats. "
+        "Use a format-specific tool or skill instead (e.g. a PDF tool for .pdf)."
+    )
 
 
 def _normalize_encoding_name(encoding: str) -> str:
@@ -441,6 +476,14 @@ def _read_text_file(
     if not target.is_file():
         return {"success": False, "error": f"Not a file: {target}"}
 
+    ext_error = _non_text_extension_error(target)
+    if ext_error:
+        return {
+            "success": False,
+            "error": ext_error,
+            "path": str(target),
+        }
+
     try:
         size_bytes = target.stat().st_size
 
@@ -449,7 +492,10 @@ def _read_text_file(
             if not _is_text_bytes(sample):
                 return {
                     "success": False,
-                    "error": "Cannot read file: not a text file",
+                    "error": (
+                        "Cannot read file: not a text file (binary content detected). "
+                        "Do not use read_text for PDF, images, Office documents, or other binaries."
+                    ),
                     "path": str(target),
                 }
 
@@ -513,7 +559,10 @@ def _read_text_file(
     except UnicodeDecodeError:
         return {
             "success": False,
-            "error": "Cannot read file: not a text file",
+            "error": (
+                "Cannot read file: not a text file (decode failed for the given encoding). "
+                "Do not use read_text for PDF, images, Office documents, or other binaries."
+            ),
             "path": str(target),
         }
     except LookupError:
@@ -666,7 +715,19 @@ def read_text(
     encoding: str = "utf-8",
 ) -> str:
     """
-    Read a text file and return its contents as JSON.
+    Read a plain-text file (UTF-8 by default) and return JSON wrapping its content.
+
+    USE ONLY for plain-text files, for example:
+    .txt, .md, .json, .csv, .tsv, .py, .js, .ts, .html, .css, .xml, .yaml, .yml,
+    .toml, .ini, .log, .sh, .rs, .go, .java, .c, .cpp, source code, and similar.
+
+    DO NOT use for PDF, images, Office (.docx/.xlsx/.pptx), archives (.zip),
+    audio/video, or any other binary format. Those are not plain text; this tool
+    will fail without returning file content. For PDFs use a PDF-specific tool
+    or skill if available — never read_text.
+
+    Response shape: JSON with success/error fields. On success, the file text is
+    in the "content" string field (not a parsed document structure).
 
     IMPORTANT — 50K byte limit (system rule):
     - Each call returns at most 50K bytes (51200) of file data.
@@ -683,14 +744,11 @@ def read_text(
       to the 50K byte cap). If more content remains, truncated=true and
       next_offset points to the next byte to read.
 
-    Only text files are supported. If the target is binary or otherwise not
-    valid text under the given encoding, the tool returns an error and does
-    not include any file content.
-
     Args:
-        path: File path. Absolute paths are used as-is; relative paths resolve
-              against `cwd` when provided, else the WORKDIR environment
-              variable, else the process cwd (same order as skill tools).
+        path: Path to a plain-text file (not PDF/binary). Absolute paths are
+              used as-is; relative paths resolve against `cwd` when provided,
+              else the WORKDIR environment variable, else the process cwd
+              (same order as skill tools).
         offset: Byte offset to start reading from (default 0). Use next_offset
                 from a previous truncated response to continue.
         lines: Optional max number of lines to return. Omit/null to read the

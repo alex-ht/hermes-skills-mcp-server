@@ -93,7 +93,9 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - **`lines` (optional)**: when omitted/`null`, read the entire file (within the 50K byte cap). When set to a positive integer N, return at most N lines (still subject to the 50K cap). Invalid values (non-positive, non-integer) must return a clear error.
 - On success returns JSON with `success`, `path` (resolved absolute), `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, `content`, and a `message` when truncated explaining how to continue (byte cap vs line limit).
 - Chunk boundaries must not split multi-byte characters for the chosen encoding (trim incomplete trailing sequences; for UTF-8, skip incomplete lead bytes when `offset > 0`).
-- **Text only**: if the target is not a text file (e.g. contains NUL bytes, or cannot be decoded with the given encoding), return `success: false` with a clear error such as `"Cannot read file: not a text file"` and **must not include any file content**.
+- **Plain text only**: the tool description MUST state USE ONLY plain-text extensions and DO NOT use for PDF, images, Office, archives, or other binaries.
+- Known non-text extensions (e.g. `.pdf`, `.png`, `.docx`, `.zip`) MUST be rejected early with a clear error that names the extension and tells the agent not to use `read_text` for that format; **must not include any file content**.
+- Additional content checks: if the target is not a text file (e.g. contains NUL bytes, or cannot be decoded with the given encoding), return `success: false` with a clear error and **must not include any file content**.
 - Clear errors for missing paths, directories, empty `path`, invalid/past-end `offset`, invalid `lines`, unknown encoding, and I/O failures.
 - Optional `encoding` (default `utf-8`).
 

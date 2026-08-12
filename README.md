@@ -14,7 +14,7 @@ This server exposes these tools that agents love to use:
 - `skills_list` — lightweight discovery
 - `skill_view` — the main "skill-info" tool (read full `SKILL.md` or supporting files)
 - `skill_manage` — create new skills (more actions planned)
-- `read_text` — read an arbitrary text file (absolute or relative path; rejects non-text)
+- `read_text` — read a plain-text file only (not PDF/images/Office); absolute or relative path
 
 The format is compatible with the agentskills.io / Hermes SKILL.md convention, so skills are portable.
 
@@ -158,11 +158,11 @@ Once connected in OpenClaw, the agent can call:
 
 ### `read_text` notes
 
-- Returns JSON with `success`, `path`, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, and `content` on success.
+- Returns JSON with `success`, `path`, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, and `content` on success. The file text is the `content` string — not a parsed document structure.
+- **Plain text only**: use for `.txt`, `.md`, `.json`, `.csv`, source code, logs, etc. **Do not use for PDF, images, Office, archives, or other binaries** — known extensions are rejected early; other binaries fail content checks. No file content is returned on failure. For PDFs use a PDF-specific tool/skill.
 - **50K byte limit (important)**: each call returns at most **50K bytes (51200)**. If more data remains, `truncated` is `true` and `next_offset` is set — call again with `offset=next_offset` until `truncated` is `false`. Do not assume a single call returns the whole file.
 - **`lines` (optional)**: max number of lines to return. **Default (omit/`null`) = read the entire file** (still capped by 50K bytes). When set, returns at most that many lines; if more content remains, use `offset=next_offset` to continue.
 - **Relative `path` base** (same order as skill tools): explicit `cwd` → `WORKDIR` env → process cwd.
-- **Text files only**: if the target is binary/non-text (NUL bytes in the probe sample, or cannot decode with the given encoding), the tool returns `success: false` with an error like `"Cannot read file: not a text file"` and **does not include file content**.
 
 ## Creating New Skills
 
