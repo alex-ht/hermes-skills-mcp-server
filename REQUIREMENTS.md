@@ -15,7 +15,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - **Progressive Disclosure**: `skills_list` returns only metadata. Full content is loaded on demand via `skill_view`.
 - **Portable Skill Format**: Uses the widely understood `SKILL.md` format so skills can be shared between different agents.
 - **Security**: Strict containment to the chosen skills root. No path traversal.
-- **Agent-Usable**: Tools return clean, structured JSON that LLMs can reliably parse and act upon.
+- **Agent-Usable**: Tools return clean, structured **plain text** (not JSON) that LLMs can read and act upon without a parse step.
 
 ## Target Users
 
@@ -46,14 +46,14 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - Supports optional category filter.
 - Must work even if the skills root is empty.
 - **Must accept optional `cwd: str | None = None`** parameter (documented in the tool).
-- Always include the resolved `skills_root` in the JSON response.
+- Always include the resolved `skills_root` in the plain-text response.
 
 **FR-3: skill_view tool (the "skill-info" tool)**
 
 - `skill_view(name, file_path?, cwd?)`
 - `name` can be directory name or declared skill name (directory name preferred for reliability).
 - Supports loading sub-files inside a skill (e.g. `references/xxx.md`).
-- Returns parsed frontmatter + body for `SKILL.md`, raw content for other files.
+- Returns the raw file contents as plain text (SKILL.md includes its YAML frontmatter). A short header names `skills_root`, `skill_name`, and `file`.
 - Clear error messages for missing skills or invalid paths.
 - **Must accept optional `cwd: str | None = None`** parameter.
 - Security: strict path validation relative to the resolved root.
@@ -64,7 +64,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - Future actions (patch, delete) should be planned but clearly marked as not-yet-implemented.
 - All writes must be safe and contained.
 - **Must accept optional `cwd: str | None = None`** parameter.
-- Returns clear success/error JSON.
+- Returns a clear plain-text success or error message.
 
 **FR-5: Format Compatibility**
 
@@ -73,9 +73,9 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 
 **FR-6: Error Handling & Structured Output**
 
-- Every tool returns JSON with `success`, `error` (on failure), and relevant data.
+- Every tool returns **plain text**, not a JSON object. Failures start with `Error: ` plus a clear message.
 - Path safety errors must be explicit.
-- Every successful response should surface the `skills_root` that was actually used.
+- Every successful skill-tool response should surface the `skills_root` that was actually used.
 
 **FR-7: OpenClaw Registration**
 
@@ -91,7 +91,7 @@ The primary target is **pure OpenClaw environments**. OpenClaw users should be a
 - **Hard limit of 50K bytes (51200) per call**: never return more than this much file data in one response. This is a critical agent-facing rule and must be documented in the tool description.
 - `offset` is a non-negative **byte** offset (default `0`). When content is truncated, the response MUST include `truncated: true` and `next_offset` so the agent can continue with `offset=next_offset`. When the end of the file is reached, `truncated` is `false` and `next_offset` is `null`.
 - **`lines` (optional)**: when omitted/`null`, read the entire file (within the 50K byte cap). When set to a positive integer N, return at most N lines (still subject to the 50K cap). Invalid values (non-positive, non-integer) must return a clear error.
-- On success returns JSON with `success`, `path` (resolved absolute), `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, `content`, and a `message` when truncated explaining how to continue (byte cap vs line limit).
+- On success returns plain text: a metadata header (`path` as resolved absolute, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`), an optional continuation message when truncated (byte cap vs line limit), a `-----` separator, then the raw file text.
 - Chunk boundaries must not split multi-byte characters for the chosen encoding (trim incomplete trailing sequences; for UTF-8, skip incomplete lead bytes when `offset > 0`).
 - **Plain text only**: the tool description MUST state USE ONLY plain-text extensions and DO NOT use for PDF, images, Office, archives, or other binaries.
 - Known non-text extensions (e.g. `.pdf`, `.png`, `.docx`, `.zip`) MUST be rejected early with a clear error that names the extension and tells the agent not to use `read_text` for that format; **must not include any file content**.

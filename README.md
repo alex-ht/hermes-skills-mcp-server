@@ -16,6 +16,8 @@ This server exposes these tools that agents love to use:
 - `skill_manage` — create new skills (more actions planned)
 - `read_text` — read a plain-text file only (not PDF/images/Office); absolute or relative path
 
+All tools return **plain text** (not JSON). File-content tools (`skill_view`, `read_text`) put a short metadata header first, then a `-----` separator, then the raw file text. Failures start with `Error: `.
+
 The format is compatible with the agentskills.io / Hermes SKILL.md convention, so skills are portable.
 
 ## Pure OpenClaw Setup (No Hermes Needed)
@@ -108,7 +110,7 @@ read_text(path="/absolute/path/to/file.txt", offset=1234, lines=50)
 - If `cwd` is provided, it becomes the base for the "local project skills" detection layer (#2 above).
 - Passing the workspace root (e.g. `~/.openclaw/workspace`) will reliably pick up `<workspace>/skills`.
 - If omitted, the server falls back to the `WORKDIR` environment variable, then full auto-detection (including the real process `cwd` and OpenClaw config).
-- The tool response always includes the final resolved `"skills_root"` so you can see what was used.
+- The tool response always includes the final resolved `skills_root` (as a plain-text header line) so you can see what was used.
 
 This design is ideal for agents: the LLM can decide "for this task I want skills from this workspace" and pass the `cwd` explicitly on the tool call.
 
@@ -158,9 +160,9 @@ Once connected in OpenClaw, the agent can call:
 
 ### `read_text` notes
 
-- Returns JSON with `success`, `path`, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`, and `content` on success. The file text is the `content` string — not a parsed document structure.
+- Returns **plain text** (not JSON): a short metadata header (`path`, `encoding`, `size_bytes`, `offset`, `bytes_read`, `max_bytes`, `lines`, `lines_returned`, `truncated`, `next_offset`), then a `-----` separator, then the raw file text. The file text is not a parsed document structure.
 - **Plain text only**: use for `.txt`, `.md`, `.json`, `.csv`, source code, logs, etc. **Do not use for PDF, images, Office, archives, or other binaries** — known extensions are rejected early; other binaries fail content checks. No file content is returned on failure. For PDFs use a PDF-specific tool/skill.
-- **50K byte limit (important)**: each call returns at most **50K bytes (51200)**. If more data remains, `truncated` is `true` and `next_offset` is set — call again with `offset=next_offset` until `truncated` is `false`. Do not assume a single call returns the whole file.
+- **50K byte limit (important)**: each call returns at most **50K bytes (51200)**. If more data remains, the header sets `truncated: true` and provides `next_offset` — call again with `offset=next_offset` until `truncated` is `false`. Do not assume a single call returns the whole file.
 - **`lines` (optional)**: max number of lines to return. **Default (omit/`null`) = read the entire file** (still capped by 50K bytes). When set, returns at most that many lines; if more content remains, use `offset=next_offset` to continue.
 - **Relative `path` base** (same order as skill tools): explicit `cwd` → `WORKDIR` env → process cwd.
 

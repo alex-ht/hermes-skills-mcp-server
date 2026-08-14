@@ -578,6 +578,130 @@ def _read_text_file(
             "path": str(target),
         }
 
+
+# =============================================================================
+# Plain-text response formatting (no JSON wrappers)
+# =============================================================================
+
+_CONTENT_SEPARATOR = "-----"
+
+
+def _format_scalar(value: Any) -> str:
+    """Render a metadata value as a single-line plain-text string."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_format_scalar(v) for v in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={_format_scalar(v)}" for k, v in value.items())
+    text = str(value)
+    return " ".join(text.splitlines()).strip()
+
+
+def _format_error(message: str, extra: Optional[str] = None) -> str:
+    text = f"Error: {message}"
+    if extra:
+        text = f"{text}\n\n{extra}"
+    return text
+
+
+def _format_skill_entry(skill: Dict[str, Any]) -> str:
+    name = skill.get("name") or skill.get("directory") or "?"
+    lines = [name]
+    directory = skill.get("directory")
+    if directory and directory != name:
+        lines.append(f"  directory: {directory}")
+    description = skill.get("description")
+    if description:
+        desc = str(description).strip()
+        desc_lines = desc.splitlines()
+        if len(desc_lines) == 1:
+            lines.append(f"  description: {desc}")
+        else:
+            lines.append("  description:")
+            lines.extend(f"    {line}" for line in desc_lines)
+    if skill.get("version"):
+        lines.append(f"  version: {_format_scalar(skill['version'])}")
+    if skill.get("platforms"):
+        lines.append(f"  platforms: {_format_scalar(skill['platforms'])}")
+    if skill.get("category"):
+        lines.append(f"  category: {_format_scalar(skill['category'])}")
+    if skill.get("score") is not None:
+        lines.append(f"  score: {_format_scalar(skill['score'])}")
+    return "\n".join(lines)
+
+
+def _format_skills_list(
+    skills: List[Dict[str, Any]],
+    skills_root: str,
+    header: Optional[str] = None,
+) -> str:
+    parts: List[str] = []
+    if header:
+        parts.append(header)
+        parts.append("")
+    parts.append(f"skills_root: {skills_root}")
+    parts.append(f"count: {len(skills)}")
+    if skills:
+        parts.append("")
+        parts.append("\n\n".join(_format_skill_entry(s) for s in skills))
+    return "\n".join(parts)
+
+
+def _format_kv_lines(fields: Dict[str, Any]) -> str:
+    lines: List[str] = []
+    for key, value in fields.items():
+        if value is None:
+            lines.append(f"{key}:")
+        else:
+            lines.append(f"{key}: {_format_scalar(value)}")
+    return "\n".join(lines)
+
+
+def _format_skill_document(result: Dict[str, Any], skills_root: str) -> str:
+    header = _format_kv_lines({
+        "skills_root": skills_root,
+        "skill_name": result.get("skill_name"),
+        "file": result.get("file"),
+    })
+    content = result.get("raw_content") or ""
+    return f"{header}\n\n{_CONTENT_SEPARATOR}\n{content}"
+
+
+def _format_read_text(result: Dict[str, Any]) -> str:
+    if not result.get("success"):
+        fields = {"path": result.get("path")}
+        if result.get("size_bytes") is not None:
+            fields["size_bytes"] = result["size_bytes"]
+        if result.get("offset") is not None:
+            fields["offset"] = result["offset"]
+        extra = _format_kv_lines({k: v for k, v in fields.items() if v is not None})
+        return _format_error(result.get("error", "Unknown error"), extra or None)
+
+    header = _format_kv_lines({
+        "path": result.get("path"),
+        "encoding": result.get("encoding"),
+        "size_bytes": result.get("size_bytes"),
+        "offset": result.get("offset"),
+        "bytes_read": result.get("bytes_read"),
+        "max_bytes": result.get("max_bytes"),
+        "lines": result.get("lines"),
+        "lines_returned": result.get("lines_returned"),
+        "truncated": result.get("truncated"),
+        "next_offset": result.get("next_offset"),
+    })
+    parts = [header]
+    if result.get("message"):
+        parts.append("")
+        parts.append(result["message"])
+    parts.append("")
+    parts.append(_CONTENT_SEPARATOR)
+    parts.append(result.get("content") or "")
+    return "\n".join(parts)
+
+
 # =============================================================================
 # MCP Server Definition
 # =============================================================================
@@ -592,7 +716,7 @@ def skills_list(category: Optional[str] = None, cwd: Optional[str] = None) -> st
     This is the equivalent of "skills list". Use this first, then call skill_view
     to get full content.
 
-    Returns JSON with the list of skills + the resolved skills_root.
+    Returns a plain-text list of skills plus the resolved skills_root.
 
     Args:
         category: Optional filter (matches name or description).
@@ -609,12 +733,7 @@ def skills_list(category: Optional[str] = None, cwd: Optional[str] = None) -> st
     if category:
         skills = [s for s in skills if category.lower() in (s.get("name", "") + " " + s.get("description", "")).lower()]
 
-    return json.dumps({
-        "success": True,
-        "skills_root": str(root),
-        "count": len(skills),
-        "skills": skills
-    }, indent=2, ensure_ascii=False)
+    return _format_skills_list(skills, str(root))
 
 @mcp.tool()
 def skill_view(name: str, file_path: Optional[str] = None, cwd: Optional[str] = None) -> str:
@@ -624,6 +743,9 @@ def skill_view(name: str, file_path: Optional[str] = None, cwd: Optional[str] = 
     This is the primary "skill-info" tool (equivalent to skills info / reading SKILL.md).
 
     'name' can be the directory name (recommended) or the name declared in frontmatter.
+
+    Returns plain text: a short header (skills_root / skill_name / file), then
+    a separator, then the raw file contents. Errors are a plain "Error: ..." line.
 
     Args:
         name: Skill directory name (e.g. "skill-creator" or "self-improving")
@@ -644,22 +766,22 @@ def skill_view(name: str, file_path: Optional[str] = None, cwd: Optional[str] = 
             matches = _find_fuzzy_matches(all_skills, name)
 
             if matches:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Skill not found: {name}. Found similar skills by name or description:",
-                    "suggestions": matches
-                }, indent=2, ensure_ascii=False)
-            else:
-                # Completely unable to match → return full skills list + short problem description
-                return json.dumps({
-                    "success": False,
-                    "error": f"Skill not found: {name}. No similar skill found (checked name and description).",
-                    "skills_root": str(root),
-                    "count": len(all_skills),
-                    "skills": all_skills
-                }, indent=2, ensure_ascii=False)
+                suggestions = "\n\n".join(_format_skill_entry(s) for s in matches)
+                return _format_error(
+                    f"Skill not found: {name}. Found similar skills by name or description:",
+                    suggestions,
+                )
+            return _format_skills_list(
+                all_skills,
+                str(root),
+                header=(
+                    f"Error: Skill not found: {name}. "
+                    "No similar skill found (checked name and description)."
+                ),
+            )
+        return _format_error(err or "Unknown error")
 
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _format_skill_document(result, str(root))
 
 @mcp.tool()
 def skill_manage(
@@ -677,6 +799,8 @@ def skill_manage(
 
     This gives the agent the ability to author new skills directly.
 
+    Returns a short plain-text status (success message + path, or "Error: ...").
+
     Args:
         action: "create" (more actions coming)
         name: Skill directory name
@@ -693,17 +817,23 @@ def skill_manage(
 
     if action == "create":
         if not frontmatter or not body:
-            return json.dumps({
-                "success": False,
-                "error": "create action requires both 'frontmatter' (dict) and 'body' (string)"
-            })
+            return _format_error(
+                "create action requires both 'frontmatter' (dict) and 'body' (string)"
+            )
         result = _create_skill(root, name, frontmatter, body)
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        if not result.get("success"):
+            return _format_error(result.get("error", "Failed to create skill"))
+        return _format_kv_lines({
+            "message": result.get("message", "Skill created successfully"),
+            "action": result.get("action"),
+            "skill_name": result.get("skill_name"),
+            "path": result.get("path"),
+            "skills_root": str(root),
+        })
 
-    return json.dumps({
-        "success": False,
-        "error": f"Action '{action}' not implemented yet. Only 'create' is supported in current version."
-    })
+    return _format_error(
+        f"Action '{action}' not implemented yet. Only 'create' is supported in current version."
+    )
 
 
 @mcp.tool()
@@ -715,7 +845,7 @@ def read_text(
     encoding: str = "utf-8",
 ) -> str:
     """
-    Read a plain-text file (UTF-8 by default) and return JSON wrapping its content.
+    Read a plain-text file (UTF-8 by default) and return its contents as plain text.
 
     USE ONLY for plain-text files, for example:
     .txt, .md, .json, .csv, .tsv, .py, .js, .ts, .html, .css, .xml, .yaml, .yml,
@@ -726,12 +856,13 @@ def read_text(
     will fail without returning file content. For PDFs use a PDF-specific tool
     or skill if available — never read_text.
 
-    Response shape: JSON with success/error fields. On success, the file text is
-    in the "content" string field (not a parsed document structure).
+    Response shape: a short metadata header (path, encoding, size, offset,
+    truncated, next_offset, …), then a "-----" separator, then the raw file
+    text. Errors start with "Error: " and do not include file content.
 
     IMPORTANT — 50K byte limit (system rule):
     - Each call returns at most 50K bytes (51200) of file data.
-    - If the file is larger, the response sets truncated=true and provides
+    - If the file is larger, the header sets truncated: true and provides
       next_offset. You MUST call read_text again with offset=next_offset to
       continue; do not assume you have the full file when truncated is true.
     - Always start with offset=0 (or omit offset). Never guess offsets; use
@@ -761,7 +892,7 @@ def read_text(
     result = _read_text_file(
         path, cwd=cwd, encoding=encoding, offset=offset, lines=lines
     )
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _format_read_text(result)
 
 # =============================================================================
 # Entry Point
